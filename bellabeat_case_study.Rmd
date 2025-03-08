@@ -1,0 +1,626 @@
+---
+title: "Bellabeat Case Study"
+author: "Alexandra Gal"
+date: "2025-02-26"
+output: html_document
+---
+
+# 1. Ask
+Bellabeat, a high-tech wellness company for women, wants to analyze smart device usage data to identify trends that could inform its marketing strategy. Urška Sršen, Bellabeat’s cofounder and Chief Creative Officer, has tasked the marketing analytics team with uncovering insights from consumer data on non-Bellabeat smart devices. These insights will then be applied to one of Bellabeat’s products to guide strategic marketing decisions.
+
+**Key Questions:**
+
+- What are some trends in smart device usage?
+- How could these trends apply to Bellabeat customers?
+- How could these trends influence Bellabeat’s marketing strategy?
+
+**Business Task:**
+Analyze smart device usage data, extract key insights, and provide high-level marketing recommendations for Bellabeat.
+
+# 2. Prepare
+For this analysis, we will use publicly available data to explore smart device users daily habits. The primary dataset is:
+
+- [FitBit Fitness Tracker Data](https://www.kaggle.com/datasets/arashnic/fitbit) (CC0: Public Domain) – A Kaggle dataset containing personal fitness tracker data from 30 Fitbit users. It includes minute-level records of physical activity, heart rate, sleep patterns, and daily steps, providing insights into user habits.
+
+## 2.1 Setting up my workspace
+```{r message=FALSE, warning=FALSE}
+# Install packages
+install.packages("tidyverse")
+install.packages("janitor")
+install.packages("ggplot2")
+install.packages("ggpubr")
+install.packages("readr")
+install.packages("gsubfn")
+install.packages("proto")
+install.packages("RSQLite")
+install.packages("DBI")
+install.packages("sqldf")
+install.packages("scales")
+```
+
+```{r message=FALSE, warning=FALSE}
+# Load libraries
+library(tidyverse)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(janitor)
+library(tibble)
+library(dplyr)
+library(readr)
+library(lubridate)
+library(hms)
+library(rmarkdown)
+library(sqldf)
+library(scales)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Turn off scientific notation globally
+options(scipen = 999)
+```
+
+## 2.2 Importing data
+I already checked the data in Google Sheets and decided that I won't need 'minutes' tables.
+```{r message=FALSE, warning=FALSE}
+# Load datasets
+weight <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/weightLogInfo_merged.csv")
+heartrate <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/heartrate_seconds_merged.csv")
+activity <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/dailyActivity_merged.csv")
+calories <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/dailyCalories_merged.csv")
+steps <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/dailySteps_merged.csv")
+sleep <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/sleepDay_merged.csv")
+h_calories <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/hourlyCalories_merged.csv")
+h_steps <- read_csv(file = "Fitabase Data 4.12.16-5.12.16/hourlySteps_merged.csv")
+```
+
+```{r warning=FALSE}
+# Check column names
+colnames(activity)
+colnames(calories)
+colnames(heartrate)
+colnames(sleep)
+colnames(steps)
+colnames(weight)
+colnames(h_calories)
+colnames(h_steps)
+```
+
+# 2.3 Cleaning data
+```{r warning=FALSE}
+# Check ID count
+n_distinct(activity$Id) #33
+n_distinct(calories$Id) #33
+n_distinct(heartrate$Id) #14
+n_distinct(sleep$Id) #24
+n_distinct(steps$Id) #33
+n_distinct(weight$Id) #8
+n_distinct(h_steps$Id) #33
+n_distinct(h_calories$Id) #33
+```
+
+```{r warning=FALSE}
+# Check if IDs are the same in all tables with 33 IDs
+missing_from_activity <- setdiff(activity$Id, calories$Id)
+missing_from_activity <- setdiff(activity$Id, steps$Id)
+```
+
+```{r warning=FALSE}
+# Check if IDs are the same in the other tables
+missing_from_activity <- anti_join(heartrate, activity, by = "Id")
+missing_from_activity #0
+missing_from_calories <- anti_join(sleep, calories, by = "Id")
+missing_from_calories #0
+missing_from_steps <- anti_join(weight, steps, by = "Id")
+missing_from_steps #0
+```
+
+```{r warning=FALSE}
+# Drop tables after verification
+rm(missing_from_activity, missing_from_calories, missing_from_steps)
+# Also drop heartrate and weight due to too small sample size
+rm(heartrate, weight)
+```
+
+```{r warning=FALSE}
+# Compare activity dataset to calories and steps datasets
+activity_count <- sum(activity$Calories, na.rm = TRUE)
+activity_count #2165393
+calories_count <- sum(calories$Calories, na.rm = TRUE)
+calories_count #2165393
+activity_count2 <- sum(activity$TotalSteps, na.rm = TRUE)
+activity_count2 #7179636
+steps_count <- sum(steps$StepTotal, na.rm = TRUE)
+steps_count #7179636
+```
+
+```{r warning=FALSE}
+# Drop tables after calculation
+rm(activity_count, activity_count2, calories_count, steps_count)
+# Also drop calories and steps because they are identicals to activity
+rm(calories, steps)
+```
+
+```{r warning=FALSE}
+# Check for duplicates
+sum(duplicated(activity)) #0
+sum(duplicated(sleep)) #3
+sum(duplicated(h_steps)) #0
+sum(duplicated(h_calories)) #0
+```
+
+```{r warning=FALSE}
+# Remove duplicates
+sleep <- distinct(sleep)
+sum(duplicated(sleep)) #0
+```
+
+```{r warning=FALSE}
+# Check remaining datasets
+head(activity)
+head(sleep)
+head(h_steps)
+head(h_calories)
+```
+
+```{r warning=FALSE}
+# Clean names
+activity <- activity %>%
+  clean_names() %>%
+  rename(date = activity_date)
+sleep <- sleep %>%
+  clean_names() %>%
+  rename(date = sleep_day)
+h_steps <- h_steps %>%
+  clean_names() %>%
+  rename(total_steps = step_total) %>%
+  rename(date = activity_hour)
+h_calories <- h_calories %>%
+  clean_names() %>%
+  rename(date = activity_hour)
+```
+
+```{r warning=FALSE}
+# Remove unnecessary columns
+activity <- activity %>% select(-tracker_distance, -logged_activities_distance, -very_active_distance, -moderately_active_distance, -light_active_distance, -sedentary_active_distance, -very_active_minutes, -fairly_active_minutes, -lightly_active_minutes, -sedentary_minutes)
+sleep <- sleep %>% select(-total_sleep_records)
+```
+
+```{r warning=FALSE}
+# Check for missing values
+sum(is.na(activity)) #0
+sum(is.na(sleep)) #0
+sum(is.na(h_steps)) #0
+sum(is.na(h_calories)) #0
+```
+
+```{r warning=FALSE}
+# Check for negative values
+sum(activity$total_steps < 0)
+sum(activity$total_distance < 0)
+sum(activity$calories < 0)
+sum(sleep$total_minutes_asleep < 0)
+sum(sleep$total_time_in_bed < 0)
+sum(h_calories$calories < 0)
+sum(h_steps$total_steps < 0)
+```
+
+```{r warning=FALSE}
+# Remove 0 values
+activity <- activity %>%
+  filter(!(total_steps == 0)) %>%
+  filter(!(total_distance == 0.00))
+
+#Remove 0 steps rows
+h_steps <- h_steps %>%
+  filter(!(total_steps == 0))
+```
+
+```{r warning=FALSE}
+#Check sample size
+n_distinct(activity$id) #33
+n_distinct(h_calories$id) #33
+n_distinct(h_steps$id) #33
+n_distinct(sleep$id) #24
+```
+
+### Key takeaways after the prepare phase:
+- Small sample size leads to a high margin of error.
+- The dataset lacks gender, age, or health-specific distinctions.
+- The data is outdated (from 2016) and might not reflect the current population behavior.
+
+I used the margin of error calculator with the following values:
+
+- Population: 40000000 as the target audience of the company is woman which is approximately half of the total population size in 2025
+- Confidence level: 95% due to the outdated and incomplete data
+- Sample size: 33 and only 24 for sleep patterns
+
+Margin of error(sample size 33): 17.06%
+
+Margin of error including sleep data (sample size 24): 20.01%
+
+# 3. Process
+```{r warning=FALSE}
+# Assign a unique number to each ID
+activity <- activity %>%
+  mutate(user_number = as.integer(factor(id)))
+h_steps <- h_steps %>%
+  mutate(user_number = as.integer(factor(id)))
+
+# Note: Datasets will be merged so I leave out the other 2 datasets
+```
+
+```{r warning=FALSE}
+# Convert date and time format
+activity <- activity %>% 
+  mutate(date= as_date(date, format= "%m/%d/%Y")) %>%
+  mutate(day = weekdays(date))
+sleep <- sleep %>% 
+  mutate(date = as.POSIXct(date, format = "%m/%d/%Y %I:%M:%S %p", tz = Sys.timezone())) %>%
+  mutate(day = weekdays(date))
+h_steps <- h_steps %>%
+  mutate(date = as.POSIXct(date, format = "%m/%d/%Y %I:%M:%S %p", tz = Sys.timezone())) %>%
+  mutate(day = weekdays(date))
+h_calories <- h_calories %>%
+  mutate(date = as.POSIXct(date, format = "%m/%d/%Y %I:%M:%S %p", tz = Sys.timezone())) %>%
+  mutate(day = weekdays(date))
+```
+
+```{r warning=FALSE}
+# Merge datasets
+sleep_activity <- merge(activity, sleep, by= c("id","date"), all.x = TRUE) %>%
+  drop_na() %>%
+  mutate(day = coalesce(day.x, day.y)) %>%
+  select(-day.x, -day.y)
+h_steps_calories <- merge(h_steps, h_calories, by= c("id","date"), all.x = TRUE) %>%
+  mutate(day = coalesce(day.x, day.y)) %>%
+  select(-day.x, -day.y)
+
+# Drop datasets
+rm(h_steps, h_calories, sleep)
+```
+
+```{r warning=FALSE}
+# Convert ID to factor
+activity$id <- as.factor(activity$id)
+sleep_activity$id <- as.factor(sleep_activity$id)
+h_steps_calories$id <- as.factor(h_steps_calories$id)
+```
+
+```{r warning=FALSE}
+# Rename date column to extract time
+h_steps_calories <- h_steps_calories %>%
+  rename(date_time = date)
+
+# Separate date and time
+h_steps_calories$date <- as.Date(h_steps_calories$date_time)
+h_steps_calories$time <- format(h_steps_calories$date_time, format = "%H:%M:%S")
+
+# Remove unnecessary column
+h_steps_calories <- h_steps_calories %>% select(-date_time)
+
+# Convert time to time format
+h_steps_calories$time <- as_hms(h_steps_calories$time)
+
+head(h_steps_calories)
+```
+
+```{r warning=FALSE}
+# Set days order
+activity$day <- factor(activity$day, 
+                            levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"), 
+                            ordered = TRUE)
+sleep_activity$day <- factor(sleep_activity$day, 
+                            levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"), 
+                            ordered = TRUE)
+h_steps_calories$day <- factor(h_steps_calories$day, 
+                            levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"), 
+                            ordered = TRUE)
+```
+
+```{r warning=FALSE}
+# Rename columns
+activity <- activity %>%
+  rename(steps = total_steps) %>%
+  rename(distance = total_distance)
+
+sleep_activity <- sleep_activity %>%
+  rename(steps = total_steps) %>%
+  rename(distance = total_distance) %>%
+  rename(min_asleep = total_minutes_asleep) %>%
+  rename(time_in_bed = total_time_in_bed)
+
+h_steps_calories <- h_steps_calories %>%
+  rename(steps = total_steps)
+```
+
+```{r warning=FALSE}
+# Rearrange columns in the desired order
+activity <- activity %>%
+  select(user_number, id, date, day, steps, distance, calories)
+
+sleep_activity <- sleep_activity %>%
+  select(user_number, id, date, day, min_asleep, time_in_bed, steps, distance, calories)
+
+h_steps_calories <- h_steps_calories %>%
+  select(user_number, id, date, time, day, steps, calories)
+```
+
+```{r warning=FALSE}
+# Verify if each day includes data from all users
+user_counts_per_day <- activity %>%
+  group_by(day) %>%
+  summarise(user_count = n_distinct(id))
+
+print(user_counts_per_day)
+
+user_counts_per_day_sleep <- sleep_activity %>%
+  group_by(day) %>%
+  summarise(user_count = n_distinct(id))
+
+print(user_counts_per_day_sleep)
+
+user_counts_per_day_h <- h_steps_calories %>%
+  group_by(day) %>%
+  summarise(user_count = n_distinct(id))
+
+print(user_counts_per_day_h)
+
+#Drop tables
+rm(user_counts_per_day, user_counts_per_day_sleep, user_counts_per_day_h)
+```
+
+### Data Completeness Note (User Participation):
+The dataset reveals variations in the number of active users across different days of the week. Specifically in the sleep_activity dataset, participation ranges from 16 users on Monday to 21 users on Friday and Saturday. These discrepancies may affect the reliability of the average values for days with fewer participants, particularly Monday. While the analysis adjusts for these variations by calculating averages based on active user counts, insights drawn from days with fewer participants should be interpreted with caution.
+
+```{r warning=FALSE}
+# Count the number of occurrences of each day in the dataset
+day_counts <- activity %>%
+  group_by(day) %>%
+  summarise(day_count = n())
+
+print(day_counts)
+
+day_counts_sleep <- sleep_activity %>%
+  group_by(day) %>%
+  summarise(day_count = n())
+
+print(day_counts_sleep)
+
+day_counts_h <- h_steps_calories %>%
+  group_by(day) %>%
+  summarise(day_count = n())
+
+print(day_counts_h)
+
+#Drop tables
+rm(day_counts, day_counts_sleep, day_counts_h)
+```
+
+### Data Completeness Note (Day Distribution):
+The dataset presents an uneven distribution of days across the week, with the number of recorded days varying from 110 on Monday & Sunday to 138 on Tuesday & Wednesday. This imbalance can influence the interpretation of daily activity trends, potentially skewing the results toward days with more recorded entries.
+When determining the most active days of the week, it's important to consider that higher totals on certain days may be partially attributed to the greater number of recorded instances rather than actual increased user activity. While the analysis attempts to mitigate this by calculating averages per user per day, insights for days with significantly fewer recordings (e.g., Monday or Sunday) should be interpreted cautiously.
+
+# 4. Analyze
+```{r warning=FALSE}
+# Overall summary
+summary(activity)
+summary(sleep_activity)
+summary(h_steps_calories)
+```
+
+## 4.1 Average daily activity & sleep by user
+### a. Activity
+```{r warning=FALSE}
+# SQL query to get the total activity by users
+user_day_activity <- sqldf("
+  SELECT
+    user_number,
+    id,
+    COUNT(*) AS entry_count,
+    SUM(steps) AS total_steps,
+    SUM(distance) AS total_distance,
+    SUM(calories) AS total_calories
+  FROM 
+    activity
+  GROUP BY 
+    id
+  ORDER BY 
+    id;")
+```
+
+```{r warning=FALSE}
+# Calculate daily averages for each user by dividing their totals by the number of days when they registered data
+user_day_activity <- user_day_activity %>%
+  mutate(
+    avg_steps = total_steps / entry_count,
+    avg_distance = total_distance / entry_count,
+    avg_calories = total_calories / entry_count)
+```
+
+```{r warning=FALSE}
+# Rearrange columns in the desired order
+user_day_activity <- user_day_activity %>%
+  select(user_number, id, entry_count, total_steps, avg_steps, total_distance, avg_distance, total_calories, avg_calories)
+```
+
+```{r warning=FALSE}
+# Create the bar chart with a trend line to see the entry numbers
+ggplot(user_day_activity, aes(x = factor(user_number), y = entry_count)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +  
+  geom_smooth(aes(group = 1), method = "lm", se = FALSE, color = "red", linetype = "dashed") +  
+  geom_text(aes(label = round(entry_count, 0)), vjust = -0.5, size = 3) +
+  labs(title = "Entry Count per User",
+       x = "User Number",
+       y = "Entry Count") +
+  theme_minimal()
+```
+
+Note: We have 1 user (n°14) with only 3 entries which might not give an accurate idea of his regular daily activity but it does reveal that he's not using his device actively
+
+```{r warning=FALSE}
+# Create the bar chart with a trend line to see the average daily steps by users
+ggplot(user_day_activity, aes(x = factor(user_number), y = avg_steps)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +  
+  geom_smooth(aes(group = 1), method = "lm", se = FALSE, color = "red", linetype = "dashed") +  
+  labs(title = "Average Daily Steps per User",
+       x = "User Number",
+       y = "Average Daily Steps") +
+  theme_minimal()
+```
+
+```{r warning=FALSE}
+# Create the bar chart with a trend line to see the average daily distance by users
+ggplot(user_day_activity, aes(x = factor(user_number), y = avg_distance)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +  
+  geom_smooth(aes(group = 1), method = "lm", se = FALSE, color = "red", linetype = "dashed") +
+  labs(title = "Average Daily Distance per User",
+       x = "User Number",
+       y = "Average Daily Distance") +
+  theme_minimal()
+```
+
+```{r warning=FALSE}
+# Create the bar chart with a trend line to see the average daily calories by users
+ggplot(user_day_activity, aes(x = factor(user_number), y = avg_calories)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +  # Bar chart
+  geom_smooth(aes(group = 1), method = "lm", se = FALSE, color = "red", linetype = "dashed") +  # Trend line
+  labs(title = "Average Daily Calories Burned per User",
+       x = "User Number",
+       y = "Average Daily Calories Burned") +
+  theme_minimal()
+```
+
+### b. Sleep
+```{r warning=FALSE}
+# SQL query to get the total sleep and activity by users from the smaller dataset
+user_day_sleep <- sqldf("
+  SELECT
+    user_number,
+    id,
+    COUNT(*) AS entry_count,
+    SUM(min_asleep) AS total_min_asleep,
+    SUM(time_in_bed) AS total_time_in_bed,
+    SUM(steps) AS total_steps,
+    SUM(distance) AS total_distance,
+    SUM(calories) AS total_calories
+  FROM 
+    sleep_activity
+  GROUP BY 
+    id
+  ORDER BY 
+    id;")
+```
+
+```{r warning=FALSE}
+# Calculate daily averages for each user by dividing their totals by the number of days when they registered data
+user_day_sleep <- user_day_sleep %>%
+  mutate(
+    avg_min_asleep = total_min_asleep / entry_count,
+    avg_time_in_bed = total_time_in_bed / entry_count,
+    avg_steps = total_steps / entry_count,
+    avg_distance = total_distance / entry_count,
+    avg_calories = total_calories / entry_count)
+```
+
+```{r warning=FALSE}
+# Rearrange columns in the desired order
+user_day_sleep <- user_day_sleep %>%
+  select(user_number, id, entry_count, total_min_asleep, avg_min_asleep, total_time_in_bed, avg_time_in_bed, total_steps, avg_steps, total_distance, avg_distance, total_calories, avg_calories)
+```
+
+```{r warning=FALSE}
+ggplot(user_day_sleep, aes(x = factor(user_number), y = entry_count)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +  
+  geom_smooth(aes(group = 1), method = "lm", se = FALSE, color = "red", linetype = "dashed") +  
+  geom_text(aes(label = round(entry_count, 0)), vjust = -0.5, size = 3) +
+  labs(title = "Entry Count per User",
+       x = "User Number",
+       y = "Entry Count") +
+  theme_minimal()
+```
+
+Note: Very low entry numbers from several users which might not give an accurate idea of their regular sleep pattern but it does reveal that most users don't use their devices actively for sleep log
+
+```{r warning=FALSE}
+# Create the bar chart with a trend line to see the daily average minutes asleep by users
+ggplot(user_day_sleep, aes(x = factor(user_number))) +
+  geom_bar(aes(y = avg_time_in_bed, fill = "Time in Bed"), stat = "identity") +
+  geom_bar(aes(y = avg_min_asleep, fill = "Minutes Asleep"), stat = "identity") +
+  scale_fill_manual(values = c("Time in Bed" = "steelblue", "Minutes Asleep" = "orange")) +
+  geom_smooth(aes(y = avg_time_in_bed, group = 1, color = "Trend: Time in Bed"), method = "lm", se = FALSE, linetype = "dashed", size = 1) +
+  labs(title = "Average Time in Bed and Sleep Time per User",
+       x = "User Number",
+       y = "Minutes Asleep / Time In Bed",
+       fill = "Minutes Asleep") +
+  theme_minimal()
+```
+
+## 4.2 Categorize users
+To categorize users activity levels based on their average daily steps, I'm going to use the classifications provided by Tudor-Locke and Bassett (2004), which are widely recognized in the field of physical activity research. These categories are as follows:
+
+- Sedentary: <5,000 steps per day
+- Low Active: 5,000–7,499 steps per day
+- Somewhat Active: 7,500–9,999 steps per day
+- Active: 10,000–12,499 steps per day
+- Highly Active: ≥12,500 steps per day
+
+It's important to note that these categories serve as general guidelines. Individual activity levels can vary based on factors such as age, health status and personal fitness goals.
+
+```{r warning=FALSE}
+# Create a new column with the categories
+user_day_activity <- user_day_activity %>%
+  mutate(usertype = case_when(avg_steps < 5000 ~ "sedentary",
+                              avg_steps >= 5000 & avg_steps < 7499 ~ "low active",
+                              avg_steps >= 7500 & avg_steps < 9999 ~ "somewhat active",
+                              avg_steps >= 10000 & avg_steps < 12499 ~ "active",
+                              avg_steps >= 12500 ~ "highly active"))
+```
+
+```{r warning=FALSE}
+# New table to group users by their categories
+user_classification <- user_day_activity %>%
+  group_by(usertype) %>%
+  summarise(total = n()) %>%
+  mutate(
+    totals = sum(total),
+    total_percent = total / totals, 
+    labels = scales::percent(total_percent))
+```
+
+```{r warning=FALSE}
+# Set the right order
+user_classification$usertype <- factor(user_classification$usertype, 
+                            levels = c("sedentary", "low active", "somewhat active", "active", "highly active"), 
+                            ordered = TRUE)
+
+user_day_activity$usertype <- factor(user_day_activity$usertype, 
+                            levels = c("sedentary", "low active", "somewhat active", "active", "highly active"), 
+                            ordered = TRUE)
+```
+
+```{r warning=FALSE}
+# Compute label positions for leader lines
+user_classification <- user_classification %>%
+  arrange(desc(usertype)) %>%
+  mutate(ypos = cumsum(total_percent) - (total_percent / 2))
+
+# Create the plot
+user_classification %>%
+ggplot(aes(x="",y=total_percent, fill=usertype)) +
+  geom_bar(stat = "identity", width = 1)+
+  coord_polar("y", start=0)+
+  theme_minimal()+
+  theme(axis.title.x= element_blank(),
+        axis.title.y = element_blank(),
+        panel.border = element_blank(), 
+        panel.grid = element_blank(), 
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=14, face = "bold")) +
+  scale_fill_manual(values = c("coral","yellow", "orange", "steelblue", "lightgreen")) +
+  geom_text(aes(label = labels),
+            position = position_stack(vjust = 0.5))+
+  labs(title="User classification")
+```
+
